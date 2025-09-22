@@ -37,7 +37,7 @@ dependencies:
 
   # SMS and permissions
   telephony: ^0.2.0
-  permission_handler: ^11.0.1
+  permission_handler: ^12.0.1
 
   # QR Code
   qr_flutter: ^4.1.0
@@ -46,26 +46,26 @@ dependencies:
   # Network and HTTP
   http: ^1.1.0
   wifi_iot: ^0.3.18
-  network_info_plus: ^4.1.0
+  network_info_plus: ^7.0.0
 
   # File operations
   path_provider: ^2.1.1
-  file_picker: ^6.1.1
-  share_plus: ^7.2.1
+  file_picker: ^10.3.3
+  share_plus: ^12.0.0
 
   # Data formats
-  csv: ^5.0.2
-  excel: ^2.1.0
+  csv: ^6.0.0
+  excel: ^4.0.6
 
   # UI and state management
   provider: ^6.1.1
-  flutter_riverpod: ^2.4.9
+  flutter_riverpod: ^3.0.0
 
   # AdMob
-  google_mobile_ads: ^4.0.0
+  google_mobile_ads: ^6.0.0
 
   # Utils
-  intl: ^0.19.0
+  intl: ^0.20.2
   uuid: ^4.2.1
   crypto: ^3.0.3
 
@@ -82,7 +82,7 @@ dev_dependencies:
   # activated in the `analysis_options.yaml` file located at the root of your
   # package. See that file for information about deactivating specific lint
   # rules and activating additional ones.
-  flutter_lints: ^5.0.0
+  flutter_lints: ^6.0.0
 
 # For information on the generic Dart part of this file, see the
 # following page: https://dart.dev/tools/pub/pubspec

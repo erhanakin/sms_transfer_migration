@@ -171,7 +171,7 @@ class AdMobService {
 
   /// Show rewarded ad
   void showRewardedAd({
-    required Function(RewardItem) onUserEarnedReward,
+    required Function(RewardedAdReward) onUserEarnedReward,
     VoidCallback? onAdClosed,
   }) {
     if (_isRewardedAdReady && _rewardedAd != null) {

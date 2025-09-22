@@ -54,7 +54,7 @@ class SMSService {
           'address': sms.address,
           'body': sms.body,
           'date': sms.date,
-          'read': sms.isRead ? 1 : 0,
+          'read': sms.isRead == true ? 1 : 0,
           'type': sms.type?.index ?? 1,
           'thread_id': sms.threadId,
         });
@@ -118,7 +118,7 @@ class SMSService {
           'address': sms.address,
           'body': sms.body,
           'date': sms.date,
-          'read': sms.isRead ? 1 : 0,
+          'read': sms.isRead == true ? 1 : 0,
           'type': sms.type?.index ?? 1,
           'thread_id': sms.threadId,
         });

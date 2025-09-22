@@ -22,7 +22,7 @@ class _ExportScreenState extends ConsumerState<ExportScreen> {
   final AdMobService _adMobService = AdMobService();
 
   List<SMSMessage> _smsMessages = [];
-  List<FileInfo> _exportedFiles = [];
+  List<ExportedFileInfo> _exportedFiles = [];
   bool _isLoading = false;
   bool _isExporting = false;
   ExportFormat _selectedFormat = ExportFormat.csv;
@@ -48,7 +48,7 @@ class _ExportScreenState extends ConsumerState<ExportScreen> {
 
       setState(() {
         _smsMessages = futures[0] as List<SMSMessage>;
-        _exportedFiles = futures[1] as List<FileInfo>;
+        _exportedFiles = futures[1] as List<ExportedFileInfo>;
       });
     } catch (e) {
       if (mounted) {
@@ -189,7 +189,7 @@ class _ExportScreenState extends ConsumerState<ExportScreen> {
     }
   }
 
-  Future<void> _shareFile(FileInfo fileInfo) async {
+  Future<void> _shareFile(ExportedFileInfo fileInfo) async {
     try {
       await _exportService.shareExportedFile(fileInfo.path);
     } catch (e) {
@@ -202,7 +202,7 @@ class _ExportScreenState extends ConsumerState<ExportScreen> {
     }
   }
 
-  Future<void> _deleteFile(FileInfo fileInfo) async {
+  Future<void> _deleteFile(ExportedFileInfo fileInfo) async {
     final confirmed = await DialogHelper.showWarning(
       context,
       title: 'Delete Export',
@@ -660,7 +660,7 @@ class _ExportScreenState extends ConsumerState<ExportScreen> {
     );
   }
 
-  Widget _buildFileListItem(FileInfo file) {
+  Widget _buildFileListItem(ExportedFileInfo file) {
     return ListTile(
       leading: Icon(
         _getFileIcon(file.format),
