@@ -6,6 +6,7 @@ import 'package:excel/excel.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:intl/intl.dart';
 import '../models/sms_model.dart';
+import '../models/export_models.dart';
 import '../utils/constants.dart';
 
 class ExportService {
@@ -212,19 +213,19 @@ class ExportService {
   }
 
   /// Get all exported files
-  Future<List<FileInfo>> getExportedFiles() async {
+  Future<List<ExportedFileInfo>> getExportedFiles() async {
     try {
       final directory = await _getExportDirectory();
       final files = await directory.list().toList();
 
-      final List<FileInfo> fileInfos = [];
+      final List<ExportedFileInfo> fileInfos = [];
 
       for (final file in files) {
         if (file is File) {
           final stat = await file.stat();
           final fileName = file.path.split('/').last;
 
-          fileInfos.add(FileInfo(
+          fileInfos.add(ExportedFileInfo(
             name: fileName,
             path: file.path,
             size: stat.size,
@@ -263,7 +264,7 @@ class ExportService {
       final directory = await _getExportDirectory();
       int totalSize = 0;
 
-      await for (final file in directory.list()) {
+      await for (final file in directory.list(recursive: true)) {
         if (file is File) {
           final stat = await file.stat();
           totalSize += stat.size;
@@ -321,7 +322,6 @@ class ExportService {
     try {
       final fileName = customFileName ?? _generateFileName(format);
       final totalMessages = messages.length;
-      final totalBatches = (totalMessages / batchSize).ceil();
 
       yield ExportProgress(
         current: 0,
@@ -338,12 +338,16 @@ class ExportService {
           break;
         default:
         // For XLSX and TXT, export all at once
-          await exportSMS(messages: messages, format: format, customFileName: customFileName);
+          final filePath = await exportSMS(
+              messages: messages,
+              format: format,
+              customFileName: customFileName
+          );
           yield ExportProgress(
             current: totalMessages,
             total: totalMessages,
             status: 'Export completed',
-            filePath: (await _getExportDirectory()).path + '/$fileName',
+            filePath: filePath,
           );
       }
     } catch (e) {
@@ -409,3 +413,82 @@ class ExportService {
       await sink.close();
       throw e;
     }
+  }
+
+  /// Export JSON in batches
+  Stream<ExportProgress> _exportJSONInBatches(
+      List<SMSMessage> messages,
+      String fileName,
+      int batchSize,
+      ) async* {
+    final directory = await _getExportDirectory();
+    final file = File('${directory.path}/$fileName');
+    final sink = file.openWrite();
+
+    try {
+      // Write JSON start with metadata
+      final exportInfo = {
+        'export_info': {
+          'exported_at': DateTime.now().toIso8601String(),
+          'total_messages': messages.length,
+          'app_name': AppConstants.appName,
+          'app_version': AppConstants.version,
+        },
+        'messages': [],
+      };
+
+      // Write opening structure
+      sink.write('{\n');
+      sink.write('  "export_info": ${const JsonEncoder.withIndent('  ').convert(exportInfo['export_info'])},\n');
+      sink.write('  "messages": [\n');
+
+      yield ExportProgress(
+        current: 0,
+        total: messages.length,
+        status: 'Writing JSON structure...',
+      );
+
+      // Write messages in batches
+      for (int i = 0; i < messages.length; i += batchSize) {
+        final endIndex = (i + batchSize).clamp(0, messages.length);
+        final batch = messages.sublist(i, endIndex);
+
+        for (int j = 0; j < batch.length; j++) {
+          final messageJson = const JsonEncoder.withIndent('    ').convert(batch[j].toExportJson());
+          sink.write('    $messageJson');
+
+          // Add comma if not the last message
+          if (i + j < messages.length - 1) {
+            sink.write(',');
+          }
+          sink.write('\n');
+        }
+
+        yield ExportProgress(
+          current: endIndex,
+          total: messages.length,
+          status: 'Writing batch ${(i / batchSize).floor() + 1}...',
+        );
+
+        // Small delay to prevent blocking
+        await Future.delayed(const Duration(milliseconds: 10));
+      }
+
+      // Close JSON structure
+      sink.write('  ]\n');
+      sink.write('}\n');
+
+      await sink.close();
+
+      yield ExportProgress(
+        current: messages.length,
+        total: messages.length,
+        status: 'Export completed',
+        filePath: file.path,
+      );
+    } catch (e) {
+      await sink.close();
+      throw e;
+    }
+  }
+}

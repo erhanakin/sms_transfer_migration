@@ -169,9 +169,9 @@ class AdMobService {
     );
   }
 
-  /// Show rewarded ad
+  /// Show rewarded ad - Fixed callback type
   void showRewardedAd({
-    required Function(RewardedAdReward) onUserEarnedReward,
+    required OnUserEarnedRewardCallback onUserEarnedReward,
     VoidCallback? onAdClosed,
   }) {
     if (_isRewardedAdReady && _rewardedAd != null) {

@@ -32,6 +32,7 @@ class _SenderScreenState extends ConsumerState<SenderScreen> {
   bool _isTransferring = false;
   String? _qrData;
   DeviceInfo? _deviceInfo;
+  DeviceInfo? _receiverDevice;
 
   @override
   void initState() {
@@ -72,20 +73,24 @@ class _SenderScreenState extends ConsumerState<SenderScreen> {
 
   Future<void> _loadSMSMessages() async {
     try {
+      print('🔄 Loading SMS messages...');
       final messages = await _smsService.getAllSMS();
+      print('✅ Loaded ${messages.length} SMS messages');
       setState(() {
         _smsMessages = messages;
       });
     } catch (e) {
+      print('❌ Failed to load SMS messages: $e');
       throw Exception('Failed to load SMS messages: $e');
     }
   }
 
   Future<void> _initializeDeviceInfo() async {
     try {
+      print('🔄 Initializing device info...');
       final deviceIP = await _networkService.getDeviceIP();
       if (deviceIP == null) {
-        throw Exception('Could not get device IP address');
+        throw Exception('Could not get device IP address. Make sure you are connected to WiFi.');
       }
 
       _deviceInfo = DeviceInfo(
@@ -96,7 +101,10 @@ class _SenderScreenState extends ConsumerState<SenderScreen> {
         osVersion: 'Android', // You can get actual OS version
         appVersion: AppConstants.version,
       );
+
+      print('✅ Device info initialized: ${_deviceInfo!.deviceName} at ${_deviceInfo!.ipAddress}');
     } catch (e) {
+      print('❌ Failed to initialize device info: $e');
       throw Exception('Failed to initialize device info: $e');
     }
   }
@@ -116,6 +124,8 @@ class _SenderScreenState extends ConsumerState<SenderScreen> {
     });
 
     try {
+      print('🔄 Generating QR code...');
+
       // Create transfer session
       final sessionId = const Uuid().v4();
       _transferSession = TransferSession(
@@ -127,6 +137,8 @@ class _SenderScreenState extends ConsumerState<SenderScreen> {
         mode: TransferMode.sender,
         totalMessages: _smsMessages.length,
       );
+
+      print('📱 Starting server for session: $sessionId');
 
       // Start server
       final serverStarted = await _networkService.startServer(
@@ -149,7 +161,19 @@ class _SenderScreenState extends ConsumerState<SenderScreen> {
         _transferSession?.setPreparing();
       });
 
+      print('✅ QR code generated and server started');
+
+      // Listen for device connections
+      _networkService.deviceDiscoveryStream.listen((device) {
+        print('🔍 Device discovered: ${device.deviceName}');
+        setState(() {
+          _receiverDevice = device;
+        });
+        _startTransferAutomatically();
+      });
+
     } catch (e) {
+      print('❌ QR generation failed: $e');
       DialogHelper.showError(
         context,
         title: 'QR Generation Failed',
@@ -165,6 +189,15 @@ class _SenderScreenState extends ConsumerState<SenderScreen> {
     }
   }
 
+  Future<void> _startTransferAutomatically() async {
+    if (_receiverDevice == null || _transferSession == null) return;
+
+    // Small delay to ensure receiver is ready
+    await Future.delayed(const Duration(seconds: 2));
+
+    await _startTransfer(_receiverDevice!);
+  }
+
   Future<void> _startTransfer(DeviceInfo receiverDevice) async {
     if (_transferSession == null) return;
 
@@ -174,6 +207,23 @@ class _SenderScreenState extends ConsumerState<SenderScreen> {
     });
 
     try {
+      print('🚀 Starting SMS transfer to ${receiverDevice.deviceName}');
+      print('📊 Total messages to transfer: ${_smsMessages.length}');
+
+      // Send transfer request first
+      final requestSent = await _networkService.sendTransferRequest(
+        receiverIP: receiverDevice.ipAddress,
+        receiverPort: receiverDevice.port,
+        sessionId: _transferSession!.sessionId,
+        totalMessages: _smsMessages.length,
+      );
+
+      if (!requestSent) {
+        throw Exception('Failed to send transfer request to receiver');
+      }
+
+      print('✅ Transfer request sent');
+
       int transferredCount = 0;
 
       // Send SMS in batches
@@ -181,6 +231,8 @@ class _SenderScreenState extends ConsumerState<SenderScreen> {
         batchSize: AppConstants.maxSMSBatchSize,
         sessionId: _transferSession!.sessionId,
       )) {
+        print('📤 Sending batch ${batch.batchNumber}/${batch.totalBatches} (${batch.messages.length} messages)');
+
         final success = await _networkService.sendSMSBatch(
           receiverIP: receiverDevice.ipAddress,
           receiverPort: receiverDevice.port,
@@ -193,25 +245,33 @@ class _SenderScreenState extends ConsumerState<SenderScreen> {
           setState(() {
             _transferSession?.updateProgress(transferredCount, _smsMessages.length);
           });
+          print('✅ Batch ${batch.batchNumber} sent successfully. Progress: $transferredCount/${_smsMessages.length}');
         } else {
           throw Exception('Failed to send batch ${batch.batchNumber}');
         }
 
-        // Small delay between batches
-        await Future.delayed(const Duration(milliseconds: 100));
+        // Small delay between batches to prevent overwhelming
+        await Future.delayed(const Duration(milliseconds: 200));
       }
 
       // Send completion message
-      await _networkService.sendTransferComplete(
+      print('📤 Sending transfer completion message');
+      final completeSent = await _networkService.sendTransferComplete(
         receiverIP: receiverDevice.ipAddress,
         receiverPort: receiverDevice.port,
         sessionId: _transferSession!.sessionId,
         totalMessages: _smsMessages.length,
       );
 
+      if (!completeSent) {
+        throw Exception('Failed to send completion message');
+      }
+
       setState(() {
         _transferSession?.setCompleted();
       });
+
+      print('🎉 Transfer completed successfully!');
 
       // Show success dialog
       DialogHelper.showSuccess(
@@ -224,6 +284,7 @@ class _SenderScreenState extends ConsumerState<SenderScreen> {
       );
 
     } catch (e) {
+      print('❌ Transfer failed: $e');
       setState(() {
         _transferSession?.setError(e.toString());
       });
@@ -341,6 +402,36 @@ class _SenderScreenState extends ConsumerState<SenderScreen> {
                     label: 'Device Name',
                     value: _deviceInfo?.deviceName ?? 'Unknown',
                   ),
+                  if (_smsMessages.isNotEmpty && _deviceInfo != null) ...[
+                    const SizedBox(height: AppDimensions.paddingMedium),
+                    Container(
+                      padding: const EdgeInsets.all(AppDimensions.paddingMedium),
+                      decoration: BoxDecoration(
+                        color: AppColors.successColor.withOpacity(0.1),
+                        borderRadius: BorderRadius.circular(AppDimensions.borderRadius),
+                        border: Border.all(color: AppColors.successColor.withOpacity(0.3)),
+                      ),
+                      child: Row(
+                        children: [
+                          Icon(
+                            Icons.check_circle,
+                            color: AppColors.successColor,
+                            size: AppDimensions.iconSizeMedium,
+                          ),
+                          const SizedBox(width: AppDimensions.paddingMedium),
+                          Expanded(
+                            child: Text(
+                              'Ready to transfer ${_smsMessages.length} messages',
+                              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                                color: AppColors.successColor,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
                 ],
               ),
           ],
@@ -411,22 +502,56 @@ class _SenderScreenState extends ConsumerState<SenderScreen> {
                 color: AppColors.backgroundColor,
                 borderRadius: BorderRadius.circular(AppDimensions.borderRadius),
               ),
-              child: Row(
+              child: Column(
                 children: [
-                  Icon(
-                    Icons.info_outline,
-                    color: AppColors.primaryColor,
-                    size: AppDimensions.iconSizeMedium,
+                  Row(
+                    children: [
+                      Icon(
+                        Icons.info_outline,
+                        color: AppColors.primaryColor,
+                        size: AppDimensions.iconSizeMedium,
+                      ),
+                      const SizedBox(width: AppDimensions.paddingMedium),
+                      Expanded(
+                        child: Text(
+                          'Keep this screen open until the transfer is complete. Make sure both devices are connected to the same Wi-Fi network.',
+                          style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                            color: AppColors.textSecondary,
+                          ),
+                        ),
+                      ),
+                    ],
                   ),
-                  const SizedBox(width: AppDimensions.paddingMedium),
-                  Expanded(
-                    child: Text(
-                      'Keep this screen open until the transfer is complete. Make sure both devices are connected to the same Wi-Fi network.',
-                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                        color: AppColors.textSecondary,
+                  if (_receiverDevice != null) ...[
+                    const SizedBox(height: AppDimensions.paddingMedium),
+                    Container(
+                      padding: const EdgeInsets.all(AppDimensions.paddingMedium),
+                      decoration: BoxDecoration(
+                        color: AppColors.successColor.withOpacity(0.1),
+                        borderRadius: BorderRadius.circular(AppDimensions.borderRadius),
+                        border: Border.all(color: AppColors.successColor.withOpacity(0.3)),
+                      ),
+                      child: Row(
+                        children: [
+                          Icon(
+                            Icons.link,
+                            color: AppColors.successColor,
+                            size: AppDimensions.iconSizeMedium,
+                          ),
+                          const SizedBox(width: AppDimensions.paddingMedium),
+                          Expanded(
+                            child: Text(
+                              'Connected to ${_receiverDevice!.deviceName}',
+                              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                                color: AppColors.successColor,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ),
+                        ],
                       ),
                     ),
-                  ),
+                  ],
                 ],
               ),
             ),
@@ -622,7 +747,7 @@ class _SenderScreenState extends ConsumerState<SenderScreen> {
       case TransferStatus.idle:
         return 'Ready to start transfer';
       case TransferStatus.preparing:
-        return 'Preparing for transfer...';
+        return 'Waiting for receiver to scan QR code...';
       case TransferStatus.transferring:
         return 'Transferring messages...';
       case TransferStatus.completed:
@@ -647,6 +772,7 @@ class _SenderScreenState extends ConsumerState<SenderScreen> {
         _transferSession = null;
         _qrData = null;
         _isTransferring = false;
+        _receiverDevice = null;
       });
     }
   }
@@ -656,6 +782,7 @@ class _SenderScreenState extends ConsumerState<SenderScreen> {
       _transferSession = null;
       _qrData = null;
       _isTransferring = false;
+      _receiverDevice = null;
     });
   }
 

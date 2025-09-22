@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:qr_code_scanner/qr_code_scanner.dart';
+import 'package:mobile_scanner/mobile_scanner.dart';
 import '../services/sms_service.dart';
 import '../services/network_service.dart';
 import '../services/qr_service.dart';
@@ -24,8 +24,7 @@ class _ReceiverScreenState extends ConsumerState<ReceiverScreen> {
   final QRService _qrService = QRService();
   final AdMobService _adMobService = AdMobService();
 
-  QRViewController? _qrController;
-  final GlobalKey _qrKey = GlobalKey(debugLabel: 'QR');
+  MobileScannerController? _scannerController;
 
   TransferSession? _transferSession;
   QRPairingData? _pairingData;
@@ -38,6 +37,15 @@ class _ReceiverScreenState extends ConsumerState<ReceiverScreen> {
   void initState() {
     super.initState();
     _setupMessageListener();
+    _initializeScanner();
+  }
+
+  void _initializeScanner() {
+    _scannerController = MobileScannerController(
+      detectionSpeed: DetectionSpeed.noDuplicates,
+      facing: CameraFacing.back,
+      torchEnabled: false,
+    );
   }
 
   void _setupMessageListener() {
@@ -114,22 +122,18 @@ class _ReceiverScreenState extends ConsumerState<ReceiverScreen> {
     });
   }
 
-  void _onQRViewCreated(QRViewController controller) {
-    _qrController = controller;
-    controller.scannedDataStream.listen((scanData) {
-      _onQRCodeScanned(scanData.code);
-    });
-  }
+  void _onQRCodeDetected(BarcodeCapture capture) async {
+    if (!_isScanning || capture.barcodes.isEmpty) return;
 
-  void _onQRCodeScanned(String? data) async {
-    if (data == null || !_isScanning) return;
+    final String? qrData = capture.barcodes.first.rawValue;
+    if (qrData == null) return;
 
     setState(() {
       _isScanning = false;
     });
 
     try {
-      final pairingData = _qrService.parsePairingQR(data);
+      final pairingData = _qrService.parsePairingQR(qrData);
 
       if (pairingData == null || !pairingData.isValid) {
         throw Exception('Invalid QR code format');
@@ -245,7 +249,7 @@ class _ReceiverScreenState extends ConsumerState<ReceiverScreen> {
             child: Column(
               children: [
                 Icon(
-                  Icons.qr_code_scanner,
+                  Icons.qr_code,
                   size: AppDimensions.iconSizeXLarge,
                   color: AppColors.primaryColor,
                 ),
@@ -284,16 +288,14 @@ class _ReceiverScreenState extends ConsumerState<ReceiverScreen> {
             ),
             child: ClipRRect(
               borderRadius: BorderRadius.circular(AppDimensions.borderRadius),
-              child: QRView(
-                key: _qrKey,
-                onQRViewCreated: _onQRViewCreated,
-                overlay: QrScannerOverlayShape(
-                  borderColor: AppColors.primaryColor,
-                  borderRadius: AppDimensions.borderRadius,
-                  borderLength: 30,
-                  borderWidth: 10,
-                  cutOutSize: 250,
-                ),
+              child: Stack(
+                children: [
+                  MobileScanner(
+                    controller: _scannerController,
+                    onDetect: _onQRCodeDetected,
+                  ),
+                  _buildScannerOverlay(),
+                ],
               ),
             ),
           ),
@@ -306,25 +308,92 @@ class _ReceiverScreenState extends ConsumerState<ReceiverScreen> {
             mainAxisAlignment: MainAxisAlignment.spaceEvenly,
             children: [
               IconButton(
-                onPressed: () async {
-                  await _qrController?.toggleFlash();
-                },
+                onPressed: () => _scannerController?.toggleTorch(),
                 icon: const Icon(Icons.flash_on),
                 iconSize: AppDimensions.iconSizeLarge,
                 tooltip: 'Toggle Flash',
               ),
               IconButton(
-                onPressed: () async {
-                  await _qrController?.flipCamera();
-                },
+                onPressed: () => _scannerController?.switchCamera(),
                 icon: const Icon(Icons.flip_camera_ios),
                 iconSize: AppDimensions.iconSizeLarge,
-                tooltip: 'Flip Camera',
+                tooltip: 'Switch Camera',
               ),
             ],
           ),
         ),
       ],
+    );
+  }
+
+  Widget _buildScannerOverlay() {
+    return Container(
+      decoration: BoxDecoration(
+        border: Border.all(
+          color: Colors.transparent,
+          width: 0,
+        ),
+      ),
+      child: Stack(
+        children: [
+          // Corner brackets
+          Positioned(
+            top: 50,
+            left: 50,
+            child: _buildCornerBracket(true, true),
+          ),
+          Positioned(
+            top: 50,
+            right: 50,
+            child: _buildCornerBracket(true, false),
+          ),
+          Positioned(
+            bottom: 50,
+            left: 50,
+            child: _buildCornerBracket(false, true),
+          ),
+          Positioned(
+            bottom: 50,
+            right: 50,
+            child: _buildCornerBracket(false, false),
+          ),
+          // Scanning instruction
+          Positioned(
+            bottom: 100,
+            left: 0,
+            right: 0,
+            child: Container(
+              padding: const EdgeInsets.symmetric(
+                horizontal: AppDimensions.paddingMedium,
+                vertical: AppDimensions.paddingSmall,
+              ),
+              color: Colors.black54,
+              child: Text(
+                'Position QR code within the frame',
+                style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                  color: Colors.white,
+                ),
+                textAlign: TextAlign.center,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildCornerBracket(bool top, bool left) {
+    return Container(
+      width: 30,
+      height: 30,
+      decoration: BoxDecoration(
+        border: Border(
+          top: top ? BorderSide(color: AppColors.primaryColor, width: 4) : BorderSide.none,
+          left: left ? BorderSide(color: AppColors.primaryColor, width: 4) : BorderSide.none,
+          bottom: !top ? BorderSide(color: AppColors.primaryColor, width: 4) : BorderSide.none,
+          right: !left ? BorderSide(color: AppColors.primaryColor, width: 4) : BorderSide.none,
+        ),
+      ),
     );
   }
 
@@ -334,22 +403,12 @@ class _ReceiverScreenState extends ConsumerState<ReceiverScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          // Connection Info Card
           _buildConnectionInfoCard(),
-
           const SizedBox(height: AppDimensions.paddingLarge),
-
-          // Transfer Progress Card
           _buildTransferProgressCard(),
-
           const SizedBox(height: AppDimensions.paddingLarge),
-
-          // Received Messages Summary
           _buildReceivedMessagesSummary(),
-
           const SizedBox(height: AppDimensions.paddingLarge),
-
-          // Action Buttons
           _buildActionButtons(),
         ],
       ),
@@ -669,7 +728,7 @@ class _ReceiverScreenState extends ConsumerState<ReceiverScreen> {
 
   @override
   void dispose() {
-    _qrController?.dispose();
+    _scannerController?.dispose();
     super.dispose();
   }
 }

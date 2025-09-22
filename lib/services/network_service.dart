@@ -13,7 +13,6 @@ class NetworkService {
   NetworkService._internal();
 
   HttpServer? _server;
-  Timer? _discoveryTimer;
   final StreamController<TransferMessage> _messageController = StreamController.broadcast();
   final StreamController<DeviceInfo> _deviceDiscoveryController = StreamController.broadcast();
 
@@ -25,8 +24,10 @@ class NetworkService {
     try {
       final info = NetworkInfo();
       final wifiIP = await info.getWifiIP();
+      print('🌐 Device IP: $wifiIP');
       return wifiIP;
     } catch (e) {
+      print('❌ Error getting device IP: $e');
       return null;
     }
   }
@@ -39,12 +40,16 @@ class NetworkService {
       final wifiIP = await info.getWifiIP();
       final wifiBSSID = await info.getWifiBSSID();
 
-      return {
+      final networkInfo = {
         'wifi_name': wifiName,
         'wifi_ip': wifiIP,
         'wifi_bssid': wifiBSSID,
       };
+
+      print('🌐 Network info: $networkInfo');
+      return networkInfo;
     } catch (e) {
+      print('❌ Error getting network info: $e');
       return {};
     }
   }
@@ -59,26 +64,44 @@ class NetworkService {
       // Stop existing server if running
       await stopServer();
 
+      print('🚀 Starting HTTP server on port $port...');
       _server = await HttpServer.bind(InternetAddress.anyIPv4, port);
 
-      _server!.listen((HttpRequest request) async {
-        await _handleRequest(request, sessionId, deviceInfo);
-      });
+      print('✅ Server bound successfully to 0.0.0.0:$port');
+      print('📱 Device IP: ${deviceInfo.ipAddress}');
+      print('🔐 Session ID: $sessionId');
 
-      print('Server started on port $port');
+      // Listen to incoming requests
+      _server!.listen(
+            (HttpRequest request) async {
+          print('📨 Incoming ${request.method} ${request.uri.path} from ${request.connectionInfo?.remoteAddress}');
+          await _handleRequest(request, sessionId, deviceInfo);
+        },
+        onError: (error) {
+          print('❌ Server error: $error');
+        },
+        onDone: () {
+          print('🛑 Server closed');
+        },
+      );
+
       return true;
     } catch (e) {
-      print('Failed to start server: $e');
+      print('❌ Failed to start server: $e');
       return false;
     }
   }
 
   /// Stop HTTP server
   Future<void> stopServer() async {
-    if (_server != null) {
-      await _server!.close();
-      _server = null;
-      print('Server stopped');
+    try {
+      if (_server != null) {
+        await _server!.close(force: true);
+        _server = null;
+        print('🛑 Server stopped successfully');
+      }
+    } catch (e) {
+      print('❌ Error stopping server: $e');
     }
   }
 
@@ -89,93 +112,87 @@ class NetworkService {
       DeviceInfo deviceInfo,
       ) async {
     try {
-      // Set CORS headers
-      request.response.headers.set('Access-Control-Allow-Origin', '*');
-      request.response.headers.set('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-      request.response.headers.set('Access-Control-Allow-Headers', 'Content-Type');
+      // Enable CORS for all requests
+      _setCorsHeaders(request.response);
 
       if (request.method == 'OPTIONS') {
+        print('✅ OPTIONS preflight request handled');
         request.response.statusCode = HttpStatus.ok;
         await request.response.close();
         return;
       }
 
-      final uri = request.uri;
+      final path = request.uri.path;
+      print('🛣️  Processing ${request.method} $path');
 
-      switch (uri.path) {
-        case AppConstants.discoveryEndpoint:
-          await _handleDiscoveryRequest(request, sessionId, deviceInfo);
+      switch (path) {
+        case '/discover':
+          await _handleDiscoveryEndpoint(request, sessionId, deviceInfo);
           break;
-        case AppConstants.transferEndpoint:
-          await _handleTransferRequest(request, sessionId);
+        case '/sms-transfer':
+          await _handleTransferEndpoint(request, sessionId);
+          break;
+        case '/health':
+          await _handleHealthCheck(request);
           break;
         default:
+          print('❌ Unknown endpoint: $path');
           request.response.statusCode = HttpStatus.notFound;
+          request.response.write('Endpoint not found: $path');
           await request.response.close();
       }
     } catch (e) {
-      print('Error handling request: $e');
-      request.response.statusCode = HttpStatus.internalServerError;
-      await request.response.close();
+      print('❌ Error handling request: $e');
+      try {
+        request.response.statusCode = HttpStatus.internalServerError;
+        request.response.write('Internal server error: $e');
+        await request.response.close();
+      } catch (closeError) {
+        print('❌ Error closing error response: $closeError');
+      }
     }
   }
 
-  /// Handle device discovery requests
-  Future<void> _handleDiscoveryRequest(
+  /// Set CORS headers
+  void _setCorsHeaders(HttpResponse response) {
+    response.headers.set('Access-Control-Allow-Origin', '*');
+    response.headers.set('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+    response.headers.set('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+    response.headers.set('Access-Control-Max-Age', '86400');
+  }
+
+  /// Handle health check endpoint
+  Future<void> _handleHealthCheck(HttpRequest request) async {
+    try {
+      print('💗 Health check requested');
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(jsonEncode({
+        'status': 'healthy',
+        'timestamp': DateTime.now().toIso8601String(),
+        'server': 'SMS Transfer Service'
+      }));
+      await request.response.close();
+      print('✅ Health check response sent');
+    } catch (e) {
+      print('❌ Health check error: $e');
+      rethrow;
+    }
+  }
+
+  /// Handle discovery endpoint
+  Future<void> _handleDiscoveryEndpoint(
       HttpRequest request,
       String sessionId,
       DeviceInfo deviceInfo,
       ) async {
     try {
+      print('🔍 Discovery request: ${request.method}');
+
       if (request.method == 'GET') {
-        // Respond to discovery request
-        final response = TransferMessage.discoveryResponse(deviceInfo, sessionId);
-
-        request.response.headers.contentType = ContentType.json;
-        request.response.write(response.toJsonString());
-        await request.response.close();
-
-        print('Responded to discovery request');
-      } else if (request.method == 'POST') {
-        // Handle discovery message
-        final body = await utf8.decoder.bind(request).join();
-        final data = jsonDecode(body);
-        final message = TransferMessage.fromJson(data);
-
-        if (message.type == MessageTypes.discovery) {
-          final discoveredDevice = DeviceInfo.fromJson(message.data);
-          _deviceDiscoveryController.add(discoveredDevice);
-
-          // Send response
-          final response = TransferMessage.discoveryResponse(deviceInfo, sessionId);
-          request.response.headers.contentType = ContentType.json;
-          request.response.write(response.toJsonString());
-          await request.response.close();
-        }
-      }
-    } catch (e) {
-      print('Error handling discovery request: $e');
-      request.response.statusCode = HttpStatus.badRequest;
-      await request.response.close();
-    }
-  }
-
-  /// Handle SMS transfer requests
-  Future<void> _handleTransferRequest(
-      HttpRequest request,
-      String sessionId,
-      ) async {
-    try {
-      if (request.method == 'POST') {
-        final body = await utf8.decoder.bind(request).join();
-        final data = jsonDecode(body);
-        final message = TransferMessage.fromJson(data);
-
-        _messageController.add(message);
-
-        // Send acknowledgment
+        // Simple GET request - respond with device info
         final response = {
-          'status': 'received',
+          'type': 'discovery_response',
+          'device_info': deviceInfo.toJson(),
           'session_id': sessionId,
           'timestamp': DateTime.now().toIso8601String(),
         };
@@ -183,13 +200,134 @@ class NetworkService {
         request.response.headers.contentType = ContentType.json;
         request.response.write(jsonEncode(response));
         await request.response.close();
+        print('✅ Discovery GET response sent');
+      } else if (request.method == 'POST') {
+        // POST request with discovery data
+        final body = await _readRequestBody(request);
+        print('📥 Discovery POST body: ${body.substring(0, body.length.clamp(0, 200))}...');
 
-        print('Received transfer message: ${message.type}');
+        final data = jsonDecode(body);
+        final message = TransferMessage.fromJson(data);
+
+        if (message.type == MessageTypes.discovery) {
+          final discoveredDevice = DeviceInfo.fromJson(message.data);
+          print('🎯 Device discovered: ${discoveredDevice.deviceName} at ${discoveredDevice.ipAddress}');
+
+          // Notify listeners about discovered device
+          _deviceDiscoveryController.add(discoveredDevice);
+
+          // Send response
+          final response = TransferMessage.discoveryResponse(deviceInfo, sessionId);
+          request.response.headers.contentType = ContentType.json;
+          request.response.write(response.toJsonString());
+          await request.response.close();
+          print('✅ Discovery POST response sent');
+        } else {
+          throw Exception('Invalid discovery message type: ${message.type}');
+        }
+      } else {
+        throw Exception('Unsupported method for discovery: ${request.method}');
       }
     } catch (e) {
-      print('Error handling transfer request: $e');
-      request.response.statusCode = HttpStatus.badRequest;
+      print('❌ Discovery error: $e');
+      rethrow;
+    }
+  }
+
+  /// Handle transfer endpoint
+  Future<void> _handleTransferEndpoint(
+      HttpRequest request,
+      String sessionId,
+      ) async {
+    try {
+      if (request.method != 'POST') {
+        throw Exception('Transfer endpoint only supports POST');
+      }
+
+      final body = await _readRequestBody(request);
+      print('📥 Transfer data received: ${body.length} bytes');
+
+      final data = jsonDecode(body);
+      final message = TransferMessage.fromJson(data);
+
+      print('📨 Transfer message type: ${message.type}');
+      print('🔐 Session ID match: ${message.sessionId == sessionId}');
+
+      // Forward message to listeners
+      _messageController.add(message);
+
+      // Send acknowledgment
+      final ackResponse = {
+        'status': 'received',
+        'message_type': message.type,
+        'session_id': sessionId,
+        'timestamp': DateTime.now().toIso8601String(),
+      };
+
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(jsonEncode(ackResponse));
       await request.response.close();
+
+      print('✅ Transfer message processed and acknowledged');
+    } catch (e) {
+      print('❌ Transfer error: $e');
+      rethrow;
+    }
+  }
+
+  /// Read request body as string
+  Future<String> _readRequestBody(HttpRequest request) async {
+    try {
+      final completer = Completer<String>();
+      final buffer = StringBuffer();
+
+      request.listen(
+            (data) {
+          buffer.write(utf8.decode(data));
+        },
+        onDone: () {
+          completer.complete(buffer.toString());
+        },
+        onError: (error) {
+          completer.completeError(error);
+        },
+      );
+
+      return await completer.future.timeout(const Duration(seconds: 30));
+    } catch (e) {
+      print('❌ Error reading request body: $e');
+      rethrow;
+    }
+  }
+
+  /// Send HTTP POST request
+  Future<http.Response> _sendHttpPost({
+    required String url,
+    required Map<String, dynamic> data,
+    Duration timeout = const Duration(seconds: 30),
+  }) async {
+    try {
+      print('📤 Sending POST to $url');
+      print('📤 Data size: ${jsonEncode(data).length} bytes');
+
+      final response = await http.post(
+        Uri.parse(url),
+        headers: {
+          'Content-Type': 'application/json; charset=utf-8',
+          'Accept': 'application/json',
+        },
+        body: jsonEncode(data),
+      ).timeout(timeout);
+
+      print('📥 Response ${response.statusCode} from $url');
+      if (response.statusCode != 200) {
+        print('❌ Response body: ${response.body}');
+      }
+
+      return response;
+    } catch (e) {
+      print('❌ HTTP POST error to $url: $e');
+      rethrow;
     }
   }
 
@@ -201,7 +339,10 @@ class NetworkService {
     required String sessionId,
   }) async {
     try {
-      final url = 'http://$receiverIP:$receiverPort${AppConstants.transferEndpoint}';
+      final url = 'http://$receiverIP:$receiverPort/sms-transfer';
+
+      print('📤 Sending SMS batch ${batch.batchNumber}/${batch.totalBatches}');
+      print('📊 Batch contains ${batch.messages.length} messages');
 
       final message = TransferMessage(
         type: MessageTypes.smsData,
@@ -210,15 +351,67 @@ class NetworkService {
         timestamp: DateTime.now(),
       );
 
-      final response = await http.post(
-        Uri.parse(url),
-        headers: {'Content-Type': 'application/json'},
-        body: message.toJsonString(),
-      ).timeout(AppConstants.networkTimeout);
+      final response = await _sendHttpPost(
+        url: url,
+        data: message.toJson(),
+        timeout: const Duration(seconds: 60), // Longer timeout for large batches
+      );
 
-      return response.statusCode == HttpStatus.ok;
+      final success = response.statusCode == HttpStatus.ok;
+
+      if (success) {
+        print('✅ SMS batch ${batch.batchNumber} sent successfully');
+      } else {
+        print('❌ Failed to send SMS batch: HTTP ${response.statusCode}');
+        print('❌ Response: ${response.body}');
+      }
+
+      return success;
     } catch (e) {
-      print('Failed to send SMS batch: $e');
+      print('❌ Error sending SMS batch: $e');
+      return false;
+    }
+  }
+
+  /// Send transfer request (notify receiver)
+  Future<bool> sendTransferRequest({
+    required String receiverIP,
+    required int receiverPort,
+    required String sessionId,
+    required int totalMessages,
+  }) async {
+    try {
+      final url = 'http://$receiverIP:$receiverPort/sms-transfer';
+
+      print('📤 Sending transfer request for $totalMessages messages');
+
+      final message = TransferMessage(
+        type: MessageTypes.transferRequest,
+        data: {
+          'total_messages': totalMessages,
+          'session_id': sessionId,
+          'timestamp': DateTime.now().toIso8601String(),
+        },
+        sessionId: sessionId,
+        timestamp: DateTime.now(),
+      );
+
+      final response = await _sendHttpPost(
+        url: url,
+        data: message.toJson(),
+      );
+
+      final success = response.statusCode == HttpStatus.ok;
+
+      if (success) {
+        print('✅ Transfer request sent successfully');
+      } else {
+        print('❌ Failed to send transfer request: HTTP ${response.statusCode}');
+      }
+
+      return success;
+    } catch (e) {
+      print('❌ Error sending transfer request: $e');
       return false;
     }
   }
@@ -231,101 +424,90 @@ class NetworkService {
     required int totalMessages,
   }) async {
     try {
-      final url = 'http://$receiverIP:$receiverPort${AppConstants.transferEndpoint}';
+      final url = 'http://$receiverIP:$receiverPort/sms-transfer';
+
+      print('📤 Sending transfer complete notification');
 
       final message = TransferMessage(
         type: MessageTypes.transferComplete,
         data: {
           'total_messages': totalMessages,
           'completed_at': DateTime.now().toIso8601String(),
+          'session_id': sessionId,
         },
         sessionId: sessionId,
         timestamp: DateTime.now(),
       );
 
-      final response = await http.post(
-        Uri.parse(url),
-        headers: {'Content-Type': 'application/json'},
-        body: message.toJsonString(),
-      ).timeout(AppConstants.networkTimeout);
+      final response = await _sendHttpPost(
+        url: url,
+        data: message.toJson(),
+      );
 
-      return response.statusCode == HttpStatus.ok;
+      final success = response.statusCode == HttpStatus.ok;
+
+      if (success) {
+        print('✅ Transfer complete notification sent');
+      } else {
+        print('❌ Failed to send transfer complete: HTTP ${response.statusCode}');
+      }
+
+      return success;
     } catch (e) {
-      print('Failed to send transfer complete: $e');
+      print('❌ Error sending transfer complete: $e');
       return false;
     }
   }
 
-  /// Discover devices on the network
-  Future<List<DeviceInfo>> discoverDevices({
-    required String sessionId,
-    required DeviceInfo deviceInfo,
-    Duration timeout = const Duration(seconds: 10),
-  }) async {
+  /// Check if device is reachable
+  Future<bool> isDeviceReachable(String ipAddress, int port) async {
     try {
-      final List<DeviceInfo> discoveredDevices = [];
-      final deviceIP = await getDeviceIP();
+      print('🔍 Checking reachability: $ipAddress:$port');
 
-      if (deviceIP == null) {
-        throw Exception('Could not get device IP');
-      }
+      // Try health check first
+      final healthUrl = 'http://$ipAddress:$port/health';
+      final response = await http.get(Uri.parse(healthUrl))
+          .timeout(const Duration(seconds: 10));
 
-      // Extract network prefix (e.g., "192.168.1.")
-      final ipParts = deviceIP.split('.');
-      if (ipParts.length != 4) {
-        throw Exception('Invalid IP format');
-      }
+      final isReachable = response.statusCode == HttpStatus.ok;
 
-      final networkPrefix = '${ipParts[0]}.${ipParts[1]}.${ipParts[2]}';
-
-      // Start listening for responses
-      final responseSubscription = deviceDiscoveryStream.listen((device) {
-        if (!discoveredDevices.any((d) => d.deviceId == device.deviceId)) {
-          discoveredDevices.add(device);
+      if (isReachable) {
+        print('✅ Device is reachable (health check passed)');
+        try {
+          final healthData = jsonDecode(response.body);
+          print('💗 Health status: ${healthData['status']}');
+        } catch (e) {
+          print('📄 Health response: ${response.body}');
         }
-      });
-
-      // Send discovery requests to all possible IPs in the network
-      final List<Future> requests = [];
-
-      for (int i = 1; i <= 254; i++) {
-        final targetIP = '$networkPrefix.$i';
-        if (targetIP != deviceIP) {
-          requests.add(_sendDiscoveryRequest(targetIP, sessionId, deviceInfo));
-        }
+      } else {
+        print('❌ Device not reachable: HTTP ${response.statusCode}');
       }
 
-      // Wait for timeout or all requests to complete
-      await Future.wait([
-        Future.delayed(timeout),
-        Future.wait(requests),
-      ]);
-
-      await responseSubscription.cancel();
-
-      return discoveredDevices;
+      return isReachable;
     } catch (e) {
-      print('Failed to discover devices: $e');
-      return [];
+      print('❌ Device not reachable: $e');
+      return false;
     }
   }
 
-  /// Send discovery request to a specific IP
-  Future<void> _sendDiscoveryRequest(
-      String targetIP,
-      String sessionId,
-      DeviceInfo deviceInfo,
-      ) async {
+  /// Send discovery request to specific device
+  Future<DeviceInfo?> sendDiscoveryRequest({
+    required String targetIP,
+    required int targetPort,
+    required String sessionId,
+    required DeviceInfo deviceInfo,
+  }) async {
     try {
-      final url = 'http://$targetIP:${AppConstants.transferPort}${AppConstants.discoveryEndpoint}';
+      final url = 'http://$targetIP:$targetPort/discover';
+
+      print('🔍 Sending discovery to $targetIP:$targetPort');
 
       final message = TransferMessage.discovery(deviceInfo, sessionId);
-
-      final response = await http.post(
-        Uri.parse(url),
-        headers: {'Content-Type': 'application/json'},
-        body: message.toJsonString(),
-      ).timeout(const Duration(seconds: 2));
+      final response = await _sendHttpPost(
+        url: url,
+        data: message.toJson(),
+        timeout: const Duration(seconds: 10),
+      );
 
       if (response.statusCode == HttpStatus.ok) {
         final responseData = jsonDecode(response.body);
@@ -333,26 +515,16 @@ class NetworkService {
 
         if (responseMessage.type == MessageTypes.discoveryResponse) {
           final discoveredDevice = DeviceInfo.fromJson(responseMessage.data);
-          _deviceDiscoveryController.add(discoveredDevice);
+          print('✅ Discovery successful: ${discoveredDevice.deviceName}');
+          return discoveredDevice;
         }
       }
+
+      print('❌ Discovery failed: HTTP ${response.statusCode}');
+      return null;
     } catch (e) {
-      // Ignore individual request failures
-    }
-  }
-
-  /// Check if device is reachable
-  Future<bool> isDeviceReachable(String ipAddress, int port) async {
-    try {
-      final url = 'http://$ipAddress:$port${AppConstants.discoveryEndpoint}';
-
-      final response = await http.get(
-        Uri.parse(url),
-      ).timeout(const Duration(seconds: 5));
-
-      return response.statusCode == HttpStatus.ok;
-    } catch (e) {
-      return false;
+      print('❌ Discovery error: $e');
+      return null;
     }
   }
 
@@ -364,17 +536,18 @@ class NetworkService {
     required String errorMessage,
   }) async {
     try {
-      final url = 'http://$receiverIP:$receiverPort${AppConstants.transferEndpoint}';
+      final url = 'http://$receiverIP:$receiverPort/sms-transfer';
 
       final message = TransferMessage.error(errorMessage, sessionId);
+      await _sendHttpPost(
+        url: url,
+        data: message.toJson(),
+        timeout: const Duration(seconds: 10),
+      );
 
-      await http.post(
-        Uri.parse(url),
-        headers: {'Content-Type': 'application/json'},
-        body: message.toJsonString(),
-      ).timeout(const Duration(seconds: 5));
+      print('✅ Error message sent');
     } catch (e) {
-      print('Failed to send error message: $e');
+      print('❌ Failed to send error message: $e');
     }
   }
 
@@ -386,21 +559,29 @@ class NetworkService {
         return ConnectionStatus.disconnected;
       }
 
-      // Try to connect to a known server (like Google DNS)
-      final socket = await Socket.connect('8.8.8.8', 53, timeout: const Duration(seconds: 5));
-      await socket.close();
-
-      return ConnectionStatus.connected;
+      // Try to connect to Google DNS
+      try {
+        final socket = await Socket.connect('8.8.8.8', 53,
+            timeout: const Duration(seconds: 5));
+        await socket.close();
+        print('✅ Network connectivity verified');
+        return ConnectionStatus.connected;
+      } catch (e) {
+        print('❌ Network connectivity check failed: $e');
+        return ConnectionStatus.error;
+      }
     } catch (e) {
+      print('❌ Network status error: $e');
       return ConnectionStatus.error;
     }
   }
 
   /// Dispose resources
   void dispose() {
-    _discoveryTimer?.cancel();
+    print('🧹 Disposing NetworkService...');
     stopServer();
     _messageController.close();
     _deviceDiscoveryController.close();
+    print('✅ NetworkService disposed');
   }
 }

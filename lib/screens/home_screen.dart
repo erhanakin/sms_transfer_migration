@@ -55,6 +55,11 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
 
                     const SizedBox(height: AppDimensions.paddingLarge),
 
+                    // WiFi Notice Card
+                    _buildWiFiNoticeCard(),
+
+                    const SizedBox(height: AppDimensions.paddingLarge),
+
                     // Main Features
                     _buildFeatureSection(),
 
@@ -116,6 +121,77 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                   ),
                 ),
               ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildWiFiNoticeCard() {
+    return Card(
+      color: AppColors.primaryColor.withOpacity(0.1),
+      child: Padding(
+        padding: const EdgeInsets.all(AppDimensions.paddingLarge),
+        child: Column(
+          children: [
+            Row(
+              children: [
+                Icon(
+                  Icons.wifi,
+                  size: AppDimensions.iconSizeLarge,
+                  color: AppColors.primaryColor,
+                ),
+                const SizedBox(width: AppDimensions.paddingMedium),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'WiFi Transfer Notice',
+                        style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                          fontWeight: FontWeight.bold,
+                          color: AppColors.primaryColor,
+                        ),
+                      ),
+                      const SizedBox(height: AppDimensions.paddingSmall),
+                      Text(
+                        'For SMS transfer between devices, both phones must be connected to the same WiFi network.',
+                        style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                          color: AppColors.textPrimary,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: AppDimensions.paddingMedium),
+            Container(
+              padding: const EdgeInsets.all(AppDimensions.paddingMedium),
+              decoration: BoxDecoration(
+                color: AppColors.primaryColor.withOpacity(0.1),
+                borderRadius: BorderRadius.circular(AppDimensions.borderRadius),
+                border: Border.all(color: AppColors.primaryColor.withOpacity(0.3)),
+              ),
+              child: Row(
+                children: [
+                  Icon(
+                    Icons.info_outline,
+                    color: AppColors.primaryColor,
+                    size: AppDimensions.iconSizeMedium,
+                  ),
+                  const SizedBox(width: AppDimensions.paddingMedium),
+                  Expanded(
+                    child: Text(
+                      '• Connect both devices to the same WiFi\n• Use "Send SMS" on source device\n• Use "Receive SMS" on target device\n• Keep both apps open during transfer',
+                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: AppColors.textPrimary,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
             ),
           ],
         ),
